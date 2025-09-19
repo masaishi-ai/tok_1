@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TOK圧縮版 第1回 - 知識を疑う力</title>
+    <style>
+        body {
+            font-family: 'Noto Sans JP', sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #1e1e1e;
+            color: #333;
+            overflow: hidden;
+        }
+        
+        .slide {
+            width: 100vw;
+            height: 100vh;
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 40px;
+            box-sizing: border-box;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        }
+        
+        .slide.active {
+            display: flex;
+        }
+        
+        .slide-header {
+            position: absolute;
+            top: 30px;
+            left: 50px;
+            font-size: 20px;
+            color: #666;
+        }
+        
+        .timer {
+            position: absolute;
+            top: 30px;
+            right: 50px;
+            font-size: 24px;
+            color: #e74c3c;
+            font-weight: bold;
+        }
+        
+        h1 {
+            font-size: 3.5em;
+            margin-bottom: 20px;
+            color: #2c3e50;
+            text-align: center;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        h2 {
+            font-size: 2.5em;
+            margin-bottom: 30px;
+            color: #34495e;
+            text-align: center;
+        }
+        
+        h3 {
+            font-size: 1.8em;
+            margin: 20px 0;
+            color: #2c3e50;
+        }
+        
+        .content {
+            max-width: 1000px;
+            width: 100%;
+            text-align: center;
+        }
+        
+        .navigation {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            display: flex;
+            gap: 15px;
+            z-index: 1000;
+        }
+        
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            border: none;
+            border-radius: 8px;
+            background: #3498db;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        button:hover {
+            background: #2980b9;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 8px rgba(0,0,0,0.15);
+        }
+        
+        button:disabled {
+            background: #95a5a6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .question-card {
+            background: white;
+            padding: 25px;
+            margin: 10px;
+            border-radius: 15px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+        
+        .question-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+            background: #e3f2fd;
+        }
+        
+        .big-number {
+            font-size: 3em;
+            color: #e74c3c;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .aok-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+            margin: 20px auto;
+            max-width: 900px;
+        }
+        
+        .aok-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.1);
+            transition: transform 0.3s;
+        }
+        
+        .aok-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 15px rgba(0,0,0,0.15);
+        }
+        
+        .aok-card h4 {
+            margin: 0 0 10px 0;
+            color: #e74c3c;
+            font-size: 1.2em;
+        }
+        
+        .wok-card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            margin: 15px;
+            border-left: 5px solid #3498db;
+        }
+        
+        .example-box {
+            background: #ecf0f1;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            text-align: left;
+        }
+        
+        .activity-box {
+            background: #e8f6f3;
+            border-left: 5px solid #16a085;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 5px;
+            text-align: left;
+        }
+        
+        .highlight {
+            background: #f1c40f;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        
+        .slide-number {
+            position: absolute;
+            bottom: 30px;
+            left: 30px;
+            font-size: 18px;
+            color: #7f8c8d;
+        }
+        
+        /* スライド別のテーマカラー */
+        .slide-title {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .slide-title h1, .slide-title h2 {
+            color: white;
+        }
+        
+        .slide-intro {
+            background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
+        }
+        
+        .slide-tok {
+            background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+        }
+        
+        .slide-aok {
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+        }
+        
+        .slide-wok {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        }
+        
+        .slide-summary {
+            background: linear-gradient(135deg, #89f7fe 0%, #66a6ff 100%);
+        }
+        
+        .compact-table {
+            width: 100%;
+            max-width: 800px;
+            margin: 20px auto;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        
+        .compact-table td {
+            padding: 12px;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .compact-table td:first-child {
+            font-weight: bold;
+            color: #e74c3c;
+        }
+    </style>
+</head>
+<body>
+    <!-- スライド1: タイトル -->
+    <div class="slide active slide-title">
+        <div class="content">
+            <h1>知の理論（TOK）</h1>
+            <h2>第1回：TOKの世界へようこそ</h2>
+            <p style="font-size: 1.5em; margin-top: 40px;">知識を疑う力</p>
+            <p style="font-size: 1.2em; margin-top: 20px;">30分授業（圧縮版）</p>
+        </div>
+        <div class="slide-number">1 / 10</div>
+    </div>
+
+    <!-- スライド2: アイスブレイク -->
+    <div class="slide slide-intro">
+        <div class="slide-header">導入（5分）</div>
+        <div class="timer">5:00</div>
+        <div class="content">
+            <h2>どれが最も確実？</h2>
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; max-width: 800px; margin: 0 auto;">
+                <div class="question-card">
+                    <div class="big-number">1</div>
+                    <p style="font-size: 1.2em;">1 + 1 = 2 である</p>
+                </div>
+                <div class="question-card">
+                    <div class="big-number">2</div>
+                    <p style="font-size: 1.2em;">明日も太陽は東から昇る</p>
+                </div>
+                <div class="question-card">
+                    <div class="big-number">3</div>
+                    <p style="font-size: 1.2em;">親友が自分のことを好きである</p>
+                </div>
+                <div class="question-card">
+                    <div class="big-number">4</div>
+                    <p style="font-size: 1.2em;">SNSで見た情報は正しい</p>
+                </div>
+            </div>
+            <p style="font-size: 1.3em; margin-top: 30px;">なぜそう思いましたか？</p>
+        </div>
+        <div class="slide-number">2 / 10</div>
+    </div>
+
+    <!-- スライド3: TOKとは -->
+    <div class="slide slide-tok">
+        <div class="slide-header">展開1：TOKとは何か（5分）</div>
+        <div class="timer">5:00</div>
+        <div class="content">
+            <h2>TOK = Theory of Knowledge</h2>
+            <div class="example-box" style="max-width: 700px; margin: 20px auto;">
+                <h3 style="text-align: center;">知の理論 = 知識についての知識</h3>
+                <p style="font-size: 1.3em; text-align: center; line-height: 1.8;">
+                    私たちが「知っている」と思っていることを<br>
+                    もう一度考え直す学問
+                </p>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; max-width: 700px; margin: 30px auto;">
+                <div class="activity-box">
+                    <h4>なぜ重要？</h4>
+                    <ul style="margin: 0; padding-left: 20px;">
+                        <li>情報の真偽を見極める</li>
+                        <li>批判的思考力を養う</li>
+                        <li>多角的視点を持つ</li>
+                    </ul>
+                </div>
+                <div class="activity-box">
+                    <h4>IBでの位置づけ</h4>
+                    <p style="margin: 0;">すべての教科をつなぐ<br>横断的な学び</p>
+                </div>
+            </div>
+        </div>
+        <div class="slide-number">3 / 10</div>
+    </div>
+
+    <!-- スライド4: 8つのAOK -->
+    <div class="slide slide-aok">
+        <div class="slide-header">展開2：8つの知識の領域（10分）</div>
+        <div class="timer">10:00</div>
+        <div class="content">
+            <h2>知識の領域（AOK）</h2>
+            <p style="font-size: 1.2em;">人間の知識を8つに分類</p>
+            <div class="aok-grid">
+                <div class="aok-card">
+                    <h4>数学</h4>
+                    <p>論理と証明</p>
+                </div>
+                <div class="aok-card">
+                    <h4>自然科学</h4>
+                    <p>観察と実験</p>
+                </div>
+                <div class="aok-card">
+                    <h4>人間科学</h4>
+                    <p>人間の行動</p>
+                </div>
+                <div class="aok-card">
+                    <h4>歴史</h4>
+                    <p>過去の解釈</p>
+                </div>
+                <div class="aok-card">
+                    <h4>芸術</h4>
+                    <p>創造と表現</p>
+                </div>
+                <div class="aok-card">
+                    <h4>倫理</h4>
+                    <p>善悪の判断</p>
+                </div>
+                <div class="aok-card">
+                    <h4>宗教的知識</h4>
+                    <p>信仰と精神性</p>
+                </div>
+                <div class="aok-card">
+                    <h4>土着の知識</h4>
+                    <p>伝統的な知恵</p>
+                </div>
+            </div>
+        </div>
+        <div class="slide-number">4 / 10</div>
+    </div>
+
+    <!-- スライド5: AOKミニ活動 -->
+    <div class="slide">
+        <div class="content">
+            <h2>ミニ活動：「コロナワクチン」を考える</h2>
+            <p style="font-size: 1.3em;">異なる領域から見ると...</p>
+            <table class="compact-table">
+                <tr>
+                    <td>自然科学</td>
+                    <td>効果と副作用のデータ、臨床試験の結果</td>
+                </tr>
+                <tr>
+                    <td>倫理</td>
+                    <td>接種の自由と社会的責任のバランス</td>
+                </tr>
+                <tr>
+                    <td>歴史</td>
+                    <td>過去のパンデミックとワクチン開発の歴史</td>
+                </tr>
+            </table>
+            <div class="activity-box" style="max-width: 600px; margin: 30px auto;">
+                <p style="font-size: 1.2em; text-align: center;">
+                    同じテーマでも、<span class="highlight">領域によってアプローチが違う</span>
+                </p>
+            </div>
+        </div>
+        <div class="slide-number">5 / 10</div>
+    </div>
+
+    <!-- スライド6: 4つの主要なWOK -->
+    <div class="slide slide-wok">
+        <div class="slide-header">展開3：知るための方法（8分）</div>
+        <div class="timer">8:00</div>
+        <div class="content">
+            <h2>4つの主要なWOK</h2>
+            <p style="font-size: 1.2em;">Ways of Knowing - 知るための方法</p>
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; max-width: 800px; margin: 20px auto;">
+                <div class="wok-card">
+                    <h3>1. 言語（Language）</h3>
+                    <p>概念を伝え、思考を構造化</p>
+                    <p style="color: #666; font-size: 0.9em;">問い：言葉にできないことは知ることができないか？</p>
+                </div>
+                <div class="wok-card">
+                    <h3>2. 知覚（Perception）</h3>
+                    <p>五感を通じて世界を認識</p>
+                    <p style="color: #666; font-size: 0.9em;">問い：見たものを信じてよいか？</p>
+                </div>
+                <div class="wok-card">
+                    <h3>3. 理性（Reason）</h3>
+                    <p>論理的に推論する</p>
+                    <p style="color: #666; font-size: 0.9em;">問い：感情は理性の邪魔か、助けか？</p>
+                </div>
+                <div class="wok-card">
+                    <h3>4. 感情（Emotion）</h3>
+                    <p>価値判断に影響</p>
+                    <p style="color: #666; font-size: 0.9em;">問い：芸術を理解するのに感情は必要か？</p>
+                </div>
+            </div>
+        </div>
+        <div class="slide-number">6 / 10</div>
+    </div>
+
+    <!-- スライド7: WOKの具体例 -->
+    <div class="slide">
+        <div class="content">
+            <h2>WOKを体験してみよう</h2>
+            <div class="example-box" style="max-width: 700px; margin: 20px auto;">
+                <h3>錯視の例</h3>
+                <p style="font-size: 1.3em; text-align: center;">
+                    同じ長さの線が違って見える...<br>
+                    <span class="highlight">知覚は常に正しいとは限らない</span>
+                </p>
+            </div>
+            <div class="example-box" style="max-width: 700px; margin: 20px auto;">
+                <h3>言葉の限界</h3>
+                <p style="font-size: 1.3em; text-align: center;">
+                    「雪」を見たことがない人に説明してみて<br>
+                    <span class="highlight">言語だけでは伝えきれないものがある</span>
+                </p>
+            </div>
+            <div class="activity-box" style="max-width: 600px; margin: 30px auto;">
+                <p style="text-align: center; font-size: 1.2em;">
+                    私たちは<strong>複数のWOKを組み合わせて</strong>物事を知る
+                </p>
+            </div>
+        </div>
+        <div class="slide-number">7 / 10</div>
+    </div>
+
+    <!-- スライド8: まとめ -->
+    <div class="slide slide-summary">
+        <div class="slide-header">まとめ（2分）</div>
+        <div class="timer">2:00</div>
+        <div class="content">
+            <h2>今日のまとめ</h2>
+            <div class="example-box" style="max-width: 700px; margin: 20px auto; background: white;">
+                <h3 style="text-align: center;">覚えておきたい3つのポイント</h3>
+                <ol style="font-size: 1.3em; line-height: 2;">
+                    <li>TOKは<span class="highlight">「知っている」ことを疑う</span>学問</li>
+                    <li>知識には<span class="highlight">8つの領域（AOK）</span>がある</li>
+                    <li>私たちは<span class="highlight">様々な方法（WOK）</span>で物事を知る</li>
+                </ol>
+            </div>
+        </div>
+        <div class="slide-number">8 / 10</div>
+    </div>
+
+    <!-- スライド9: 宿題 -->
+    <div class="slide">
+        <div class="content">
+            <h2>宿題</h2>
+            <div class="activity-box" style="max-width: 700px; margin: 0 auto;">
+                <h3>WOKを観察してみよう</h3>
+                <p style="font-size: 1.3em; text-align: center; margin: 20px 0;">
+                    今日学んだ4つのWOKのうち<br>
+                    自分が最もよく使っていると思うものを1つ選び<br>
+                    具体例とともに<span class="highlight">100字</span>で説明する
+                </p>
+                <div class="example-box">
+                    <p><strong>例：</strong>私は「理性」を最もよく使っている。数学の問題を解くとき、論理的に順序立てて考える。感情に左右されずに正解を導き出せるが、時には直感的なひらめきも必要だと感じる。</p>
+                </div>
+            </div>
+        </div>
+        <div class="slide-number">9 / 10</div>
+    </div>
+
+    <!-- スライド10: 次回予告 -->
+    <div class="slide slide-title">
+        <div class="content">
+            <h1>次回予告</h1>
+            <h2>第2回：TOKの実践</h2>
+            <p style="font-size: 1.5em; margin: 30px 0;">
+                残り4つのWOKと<br>
+                「知識の問い」を立てる練習
+            </p>
+            <div class="example-box" style="background: rgba(255,255,255,0.2); color: white;">
+                <p style="font-size: 1.2em; text-align: center;">
+                    より深く「知る」ということを探求していきます
+                </p>
+            </div>
+        </div>
+        <div class="slide-number">10 / 10</div>
+    </div>
+
+    <!-- ナビゲーション -->
+    <div class="navigation">
+        <button id="prevBtn" onclick="changeSlide(-1)">前へ</button>
+        <button id="nextBtn" onclick="changeSlide(1)">次へ</button>
+    </div>
+
+    <script>
+        let currentSlide = 0;
+        const slides = document.querySelectorAll('.slide');
+        const totalSlides = slides.length;
+
+        function showSlide(n) {
+            slides.forEach(slide => slide.classList.remove('active'));
+            currentSlide = (n + totalSlides) % totalSlides;
+            slides[currentSlide].classList.add('active');
+            
+            document.getElementById('prevBtn').disabled = currentSlide === 0;
+            document.getElementById('nextBtn').disabled = currentSlide === totalSlides - 1;
+        }
+
+        function changeSlide(direction) {
+            showSlide(currentSlide + direction);
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft') changeSlide(-1);
+            if (e.key === 'ArrowRight') changeSlide(1);
+        });
+
+        showSlide(0);
+    </script>
+</body>
+</html>
