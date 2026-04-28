@@ -1,0 +1,645 @@
+import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, collection, addDoc, doc, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import { 
+  Mic, 
+  Square, 
+  CheckCircle, 
+  ChevronRight, 
+  PenTool,
+  Loader2,
+  AlertCircle,
+  Lock,
+  Users,
+  Eye,
+  LogOut,
+  ClipboardList,
+  Clock,
+  Mail,
+  BarChart3,
+  Volume2,
+  FileSpreadsheet,
+  Check,
+  Award
+} from 'lucide-react';
+
+// --- FIREBASE SETTINGS ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'gcis-english-assessment';
+
+// --- CONFIG ---
+const apiKey = ""; 
+const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
+const TEACHER_PASSCODE = "teacher123";
+
+// --- TEST SECTIONS ---
+const SECTIONS = [
+  { id: 'mic-check', title: '音声テスト', type: 'system' },
+  { id: 'auth', title: '受験者情報入力', type: 'system' },
+  { id: 'wait-start', title: '試験開始待機', type: 'system' },
+  {
+    id: 'speaking-1',
+    title: 'Speaking 1: 音読',
+    score: "6点",
+    timeLimit: "制限なし",
+    type: 'speaking',
+    instruction: '以下の英文を正確かつ自然な速さで読み上げてください。',
+    content: "Many students enjoy participating in school clubs after their classes. These activities help them make new friends and learn important life skills. Whether it is sports or music, joining a club is a great way to improve your English and have a balanced school life.",
+  },
+  {
+    id: 'speaking-2',
+    title: 'Speaking 2: イラスト描写',
+    score: "8点",
+    timeLimit: "110秒",
+    type: 'speaking',
+    autoTimer: 110,
+    instruction: 'イラストを確認し、外国人観光客に目的地への行き方を説明してください。',
+    image: "https://drive.google.com/uc?export=view&id=1vBxAISaKvaPVRQJCeejCA8nbh6gRL2KG"
+  },
+  {
+    id: 'speaking-3',
+    title: 'Speaking 3: Q&A',
+    score: "6点",
+    timeLimit: "90秒",
+    type: 'speaking',
+    autoTimer: 90,
+    instruction: '以下の質問に対し、理由を添えて英語で答えてください。',
+    topic: "What are you looking forward to the most in this GCIS course? Please explain with specific reasons.",
+  },
+  {
+    id: 'writing',
+    title: 'Writing: エッセイ',
+    score: "10点",
+    timeLimit: "15分",
+    type: 'writing',
+    timeLimitSeconds: 15 * 60,
+    targetWords: 80,
+    topic: "Many schools introduce international exchange programs. What is the most important benefit for students participating in these programs? Support your opinion with reasons.",
+  },
+  { id: 'submitting', title: '提出中', type: 'submitting' },
+  { id: 'complete', title: '提出完了', type: 'complete' }
+];
+
+const RUBRIC_B1_5 = [
+  { id: 1, title: "Speaking 1: 音読", total: 6, points: ["発音の正確性 (2)", "リズム・区切り (2)", "自然な流暢さ (2)"] },
+  { id: 2, title: "Speaking 2: イラスト描写", total: 8, points: ["情報の網羅性 (3)", "話速 (2)", "表現力・語彙 (3)"] },
+  { id: 3, title: "Speaking 3: Q&A", total: 6, points: ["論理性と応答性 (3)", "言語の正確性 (3)"] },
+  { id: 4, title: "Writing: エッセイ", total: 10, points: ["タスク達成度 (3)", "一貫性と結束性 (3)", "構成・語彙の質 (4)"] },
+];
+
+// --- UTILS: GEMINI API CALL ---
+async function fetchGemini(prompt, systemInstruction = "", responseSchema = null) {
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    systemInstruction: { parts: [{ text: systemInstruction }] },
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: responseSchema
+    }
+  };
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) throw new Error('Evaluation failed.');
+  const data = await response.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text;
+}
+
+// --- MIC METER COMPONENT ---
+const MicMeter = memo(({ level }) => (
+  <div className="h-2 bg-slate-200 rounded-full overflow-hidden w-full max-w-sm mx-auto mt-4 shadow-inner">
+    <div 
+      className="h-full bg-indigo-500 transition-all duration-75 shadow-[0_0_8px_rgba(79,70,229,0.4)]" 
+      style={{ width: `${Math.min(level * 4, 100)}%` }} 
+    />
+  </div>
+));
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [view, setView] = useState('student'); 
+  const [studentEmail, setStudentEmail] = useState("");
+  const [passcode, setPasscode] = useState('');
+  const [currentStep, setCurrentStep] = useState(0);
+  const [isRecording, setIsRecording] = useState(false);
+  const [transcripts, setTranscripts] = useState({}); 
+  const [writingContent, setWritingContent] = useState("");
+  const [submissions, setSubmissions] = useState([]);
+  const [selectedSubmission, setSelectedSubmission] = useState(null);
+  const [error, setError] = useState(null);
+
+  const [micLevel, setMicLevel] = useState(0);
+  const [micCheckTranscript, setMicCheckTranscript] = useState("");
+  const [autoTimer, setAutoTimer] = useState(0);
+  const [writingTimer, setWritingTimer] = useState(0);
+  const [speakingDuration, setSpeakingDuration] = useState({});
+  const [isTeacherListView, setIsTeacherListView] = useState(false);
+
+  const mediaRecorderRef = useRef(null);
+  const recognitionRef = useRef(null);
+  const startTimeRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const rafRef = useRef(null);
+  const currentStepRef = useRef(0);
+
+  useEffect(() => { currentStepRef.current = currentStep; }, [currentStep]);
+
+  // Auth Initialization
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (u) => setUser(u));
+    return () => unsubscribe();
+  }, []);
+
+  // Sync Submissions for Teacher
+  useEffect(() => {
+    if (view === 'teacher-dashboard' && user) {
+      const q = collection(db, 'artifacts', appId, 'public', 'data', 'submissions');
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        docs.sort((a, b) => (b.evaluation?.totalScore || 0) - (a.evaluation?.totalScore || 0));
+        setSubmissions(docs);
+      });
+      return () => unsubscribe();
+    }
+  }, [view, user]);
+
+  // Speaking Timer Control
+  useEffect(() => {
+    let interval;
+    if (autoTimer > 0 && isRecording) {
+      interval = setInterval(() => {
+        setAutoTimer(prev => {
+          if (prev <= 1) {
+            handleAutoFinish();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [autoTimer, isRecording]);
+
+  // Writing Timer Control
+  useEffect(() => {
+    let interval;
+    if (SECTIONS[currentStep]?.id === 'writing' && writingTimer > 0) {
+      interval = setInterval(() => setWritingTimer(t => t - 1), 1000);
+    }
+    return () => clearInterval(interval);
+  }, [currentStep, writingTimer]);
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && isRecording) {
+      const dur = (Date.now() - startTimeRef.current) / 1000;
+      setSpeakingDuration(prev => ({ ...prev, [SECTIONS[currentStepRef.current].id]: dur }));
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+        recognitionRef.current = null;
+      }
+      setIsRecording(false);
+      setAutoTimer(0);
+    }
+  }, [isRecording]);
+
+  const handleAutoFinish = useCallback(() => {
+    stopRecording();
+    setTimeout(() => { setCurrentStep(prev => prev + 1); }, 600);
+  }, [stopRecording]);
+
+  const startMicCheck = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      const analyser = audioContextRef.current.createAnalyser();
+      const source = audioContextRef.current.createMediaStreamSource(stream);
+      source.connect(analyser);
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      const updateLevel = () => {
+        if (!audioContextRef.current) return;
+        analyser.getByteFrequencyData(dataArray);
+        setMicLevel(dataArray.reduce((a, b) => a + b, 0) / dataArray.length);
+        rafRef.current = requestAnimationFrame(updateLevel);
+      };
+      updateLevel();
+      mediaRecorderRef.current = new MediaRecorder(stream);
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        recognitionRef.current = new SpeechRecognition();
+        recognitionRef.current.continuous = true;
+        recognitionRef.current.lang = 'en-US';
+        recognitionRef.current.onresult = (e) => setMicCheckTranscript(e.results[e.results.length - 1][0].transcript);
+        recognitionRef.current.start();
+      }
+      mediaRecorderRef.current.start();
+      setIsRecording(true);
+      setError(null);
+    } catch (err) { setError("マイクへのアクセスを許可してください。"); }
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorderRef.current = new MediaRecorder(stream);
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        recognitionRef.current = new SpeechRecognition();
+        recognitionRef.current.continuous = true;
+        recognitionRef.current.lang = 'en-US';
+        recognitionRef.current.onresult = (e) => {
+          const res = e.results[e.results.length - 1][0].transcript;
+          const sId = SECTIONS[currentStepRef.current].id;
+          setTranscripts(prev => ({ ...prev, [sId]: (prev[sId] || "") + " " + res }));
+        };
+        recognitionRef.current.start();
+      }
+      mediaRecorderRef.current.start();
+      startTimeRef.current = Date.now();
+      setIsRecording(true);
+      if (SECTIONS[currentStep].autoTimer) setAutoTimer(SECTIONS[currentStep].autoTimer);
+    } catch (err) { setError("録音を開始できませんでした。"); }
+  };
+
+  const handleNext = () => {
+    stopRecording();
+    const nextIdx = currentStep + 1;
+    if (SECTIONS[nextIdx]?.id === 'writing') {
+      setWritingTimer(SECTIONS[nextIdx].timeLimitSeconds);
+    }
+    setCurrentStep(nextIdx);
+  };
+
+  const submitTest = async () => {
+    if (!user || !studentEmail) return;
+    setCurrentStep(SECTIONS.findIndex(s => s.id === 'submitting'));
+    
+    const sysPrompt = `あなたはプロの英語技能試験の採点官です。
+    評価基準: CEFR B1.5（英検2級合格〜準1級挑戦レベル）を「満点 (30/30)」として評価してください。
+    出力形式: JSON。 rationale（評価根拠）は日本語で記述し、受験者の回答テキスト内容を必ず評価の詳細に含めてください。`;
+
+    const schema = {
+      type: "OBJECT",
+      properties: {
+        p1Score: { type: "NUMBER" }, p1Rationale: { type: "STRING" },
+        p2Score: { type: "NUMBER" }, p2Wpm: { type: "NUMBER" }, p2Rationale: { type: "STRING" },
+        p3Score: { type: "NUMBER" }, p3Rationale: { type: "STRING" },
+        writingScore: { type: "NUMBER" }, writingRationale: { type: "STRING" },
+        totalScore: { type: "NUMBER" }, feedback: { type: "STRING" }
+      },
+      required: ["p1Score", "p1Rationale", "p2Score", "p2Wpm", "p2Rationale", "p3Score", "p3Rationale", "writingScore", "writingRationale", "totalScore", "feedback"]
+    };
+
+    try {
+      const payload = `ID: ${studentEmail}\nP1: ${transcripts['speaking-1'] || ""}\nP2: ${transcripts['speaking-2'] || ""}\nP3: ${transcripts['speaking-3'] || ""}\nWriting: ${writingContent}`;
+      const resText = await fetchGemini(payload, sysPrompt, schema);
+      const evalData = JSON.parse(resText);
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'submissions'), {
+        studentId: studentEmail,
+        timestamp: serverTimestamp(),
+        transcripts,
+        writingContent,
+        evaluation: evalData
+      });
+      setCurrentStep(SECTIONS.findIndex(s => s.id === 'complete'));
+    } catch (err) {
+      setError("提出エラーが発生しました。");
+      setCurrentStep(SECTIONS.findIndex(s => s.id === 'writing'));
+    }
+  };
+
+  const section = SECTIONS[currentStep];
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans p-4 text-[13px] leading-tight">
+      <div className="max-w-4xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden border border-slate-200 flex flex-col min-h-[620px]">
+        
+        {view === 'student' && (
+          <div className="w-full bg-slate-200 h-1 flex gap-0.5">
+            {SECTIONS.map((_, i) => (
+              <div key={i} className={`h-full flex-1 transition-all duration-700 ${i <= currentStep ? 'bg-indigo-600' : 'bg-slate-300'}`} />
+            ))}
+          </div>
+        )}
+
+        <div className="p-5 md:p-8 flex-1 flex flex-col">
+          {error && <div className="mb-4 p-3 bg-red-50 text-red-600 rounded-xl flex items-center gap-3 text-sm font-bold border border-red-200 animate-shake">
+            <AlertCircle size={18} /> {error}
+          </div>}
+
+          {view === 'student' && (
+            <div className="animate-in fade-in duration-300 flex-1 flex flex-col">
+              
+              {section.id === 'mic-check' && (
+                <div className="max-w-xl mx-auto py-8 space-y-6 text-center flex-1 flex flex-col justify-center">
+                  <h2 className="text-xl font-black text-slate-700 tracking-wider">音声テスト</h2>
+                  <p className="text-slate-500 text-base italic leading-relaxed">
+                    録音ボタンを押し、以下のフレーズを話してください：<br/>
+                    <strong className="text-indigo-700 text-lg mt-3 block font-black">"Hello. it is a very beautiful day, isn't it?"</strong>
+                  </p>
+                  <div className="flex justify-center gap-3">
+                    {!isRecording ? (
+                      <button onClick={startMicCheck} className="bg-red-500 hover:bg-red-600 text-white px-5 py-2.5 rounded-lg font-bold shadow-md transition-all active:scale-95 flex items-center gap-2">
+                        <Mic size={16}/> 録音開始
+                      </button>
+                    ) : (
+                      <button onClick={stopRecording} className="bg-slate-800 text-white px-5 py-2.5 rounded-lg font-bold transition-all shadow-sm animate-pulse flex items-center gap-2">
+                        <Square size={16}/> 録音停止
+                      </button>
+                    )}
+                  </div>
+                  <MicMeter level={micLevel} />
+                  {micCheckTranscript && <div className="p-3 bg-green-50 text-green-700 rounded-xl border italic font-bold">認識成功: "{micCheckTranscript}"</div>}
+                  <div className="pt-4 flex flex-col gap-4">
+                    <button disabled={!micCheckTranscript || isRecording} onClick={handleNext} className="w-full bg-indigo-600 text-white py-3.5 rounded-xl text-lg font-black shadow-lg disabled:opacity-30 transition-all hover:bg-indigo-700">次へ進む</button>
+                    <button onClick={() => setView('teacher-login')} className="text-slate-300 hover:text-indigo-500 font-bold text-[10px] mt-4 flex items-center justify-center gap-1.5 uppercase tracking-widest"><Lock size={12}/> Teacher Admin Login</button>
+                  </div>
+                </div>
+              )}
+
+              {section.id === 'auth' && (
+                <div className="max-w-md mx-auto py-20 space-y-8 text-center flex-1 flex flex-col justify-center">
+                  <div className="bg-indigo-50 w-16 h-16 rounded-3xl flex items-center justify-center mx-auto text-indigo-600 shadow-inner"><Mail size={32}/></div>
+                  <h2 className="text-2xl font-black">受験者情報入力</h2>
+                  <p className="text-slate-500 text-sm">学校のメールアドレスを入力してください。</p>
+                  <input type="email" className="w-full p-4 rounded-xl border-2 text-base text-center font-bold bg-slate-50 outline-none focus:border-indigo-600 shadow-inner" placeholder="example@ac.jp" value={studentEmail} onChange={(e) => setStudentEmail(e.target.value)} spellCheck="false" autoComplete="off" />
+                  <button disabled={!studentEmail.includes('@')} onClick={handleNext} className="w-full bg-indigo-600 text-white py-4 rounded-xl text-lg font-black shadow-lg disabled:opacity-30 transition-all hover:bg-indigo-700">登録して待機する</button>
+                </div>
+              )}
+
+              {section.id === 'wait-start' && (
+                <div className="max-w-3xl mx-auto py-2 space-y-5 text-center flex-1 flex flex-col justify-center">
+                  <h2 className="text-xl font-black italic text-slate-800 tracking-tight">先生の試験開始の合図まで待機してください</h2>
+                  <div className="bg-slate-50 border-2 border-slate-100 rounded-3xl p-6 text-left space-y-4 shadow-inner overflow-y-auto max-h-[350px]">
+                    <h3 className="text-sm font-black text-indigo-600 border-b pb-1.5 flex items-center gap-2"><ClipboardList size={18}/>採点基準と配点 (CEFR B1.5 基準)</h3>
+                    {RUBRIC_B1_5.map(item => (
+                      <div key={item.id} className="bg-white p-3 rounded-xl border flex justify-between items-start shadow-sm">
+                        <div className="flex-1 pr-4">
+                          <p className="font-bold text-[13px]">{item.title}</p>
+                          <ul className="text-[10px] text-slate-500 mt-1 flex flex-wrap gap-x-2">
+                             {item.points.map((p, i) => <li key={i}>• {p}</li>)}
+                          </ul>
+                        </div>
+                        <span className="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-lg font-black text-[13px] whitespace-nowrap">満点: {item.total}点</span>
+                      </div>
+                    ))}
+                  </div>
+                  <button onClick={() => setCurrentStep(3)} className="w-full bg-indigo-600 text-white py-5 rounded-[1.5rem] text-xl font-black shadow-2xl hover:bg-indigo-700 transition-all hover:scale-[1.01]">試験を開始する</button>
+                </div>
+              )}
+
+              {['speaking', 'writing'].includes(section.type) && (
+                <div className="space-y-4 flex-1 flex flex-col">
+                  <div className="flex justify-between items-center border-b pb-4">
+                    <h2 className="text-base font-black text-indigo-600 uppercase tracking-widest">{section.title}</h2>
+                    <div className="flex gap-4">
+                      <span className="text-3xl font-black bg-indigo-100 text-indigo-700 px-6 py-2 rounded-xl border border-indigo-200">配点: {section.score}</span>
+                      {(autoTimer > 0 || section.id === 'writing') && (
+                        <div className={`${(autoTimer > 0 && autoTimer < 15) || (section.id === 'writing' && writingTimer < 60) ? 'text-red-600 animate-pulse' : 'text-slate-600'} font-black text-3xl flex items-center gap-2 bg-slate-50 px-6 py-2 rounded-xl border shadow-sm`}>
+                          <Clock size={28}/> {autoTimer > 0 ? `${autoTimer}s` : `${Math.floor(writingTimer/60)}:${(writingTimer%60).toString().padStart(2,'0')}`}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-amber-50 rounded-lg text-[13px] border border-amber-100 font-medium text-amber-900 shadow-inner">
+                    {section.instruction}
+                  </div>
+
+                  <div className="flex-1 flex flex-col min-h-0">
+                    {section.id === 'speaking-2' ? (
+                      <div className="flex-1 flex items-center justify-center p-2 bg-white rounded-2xl border-2 border-dashed overflow-hidden relative shadow-inner">
+                        <img 
+                          src={section.image} 
+                          alt="Scenario Illustration" 
+                          className="max-w-full max-h-full object-contain rounded-lg shadow-lg border border-slate-100" 
+                          loading="eager"
+                        />
+                      </div>
+                    ) : (
+                      <div className="flex-1 flex flex-col min-h-0">
+                        {section.content && <div className="flex-1 p-8 bg-slate-50 rounded-2xl border text-xl font-bold leading-relaxed text-slate-700 shadow-inner overflow-y-auto">{section.content}</div>}
+                        {section.topic && <div className="flex-1 flex items-center justify-center p-10 bg-indigo-50 rounded-2xl border border-indigo-100 text-2xl font-black text-indigo-900 leading-tight text-center">{section.topic}</div>}
+                      </div>
+                    )}
+                  </div>
+
+                  {section.type === 'speaking' && (
+                    <div className="flex flex-col items-center py-5 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 gap-4 shadow-inner">
+                      {!isRecording ? (
+                        <button onClick={startRecording} className="w-16 h-16 rounded-full bg-red-500 hover:bg-red-600 text-white flex items-center justify-center shadow-lg transition-all active:scale-95 border-2 border-white">
+                          <Mic size={28}/>
+                        </button>
+                      ) : (
+                        <button onClick={stopRecording} className="w-16 h-16 rounded-full bg-slate-800 text-white flex items-center justify-center shadow-lg animate-pulse border-2 border-white">
+                          <Square size={24}/>
+                        </button>
+                      )}
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{isRecording ? "Recording Answer..." : "Click to Start"}</p>
+                      {transcripts[section.id] && !isRecording && <div className="flex items-center gap-1.5 text-green-600 font-black bg-white px-3 py-1 rounded-full border border-green-100 shadow-sm text-[11px] animate-in slide-in-from-bottom-1"><CheckCircle size={14}/> 解答を記録しました</div>}
+                    </div>
+                  )}
+
+                  {section.type === 'writing' && (
+                    <div className="space-y-3 flex-1 flex flex-col min-h-0">
+                      <textarea className="w-full flex-1 p-6 rounded-2xl border-2 outline-none focus:border-indigo-500 text-base leading-relaxed shadow-inner bg-slate-50 font-medium" placeholder="エッセイをここに入力..." spellCheck="false" value={writingContent} onChange={(e) => setWritingContent(e.target.value)} style={{ resize:'none' }} />
+                      <div className="flex justify-between items-center text-[11px] font-bold text-slate-400 px-4">
+                        <span>Target: ~80 words</span>
+                        <div className={`px-5 py-1.5 rounded-full shadow-sm font-black text-sm border ${writingContent.trim().split(/\s+/).filter(Boolean).length >= 80 ? 'bg-green-100 text-green-700 border-green-200' : 'bg-indigo-100 text-indigo-700 border-indigo-200'}`}>{writingContent.trim().split(/\s+/).filter(Boolean).length} Words</div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end pt-4 border-t">
+                    <button onClick={section.id === 'writing' ? submitTest : handleNext} disabled={(section.type === 'speaking' && !transcripts[section.id] && !isRecording && section.id !== 'speaking-1') || (section.type === 'writing' && writingContent.length < 5) || isRecording} className="bg-indigo-600 text-white px-10 py-4 rounded-xl text-base font-black shadow-lg hover:bg-indigo-700 disabled:opacity-20 transition-all flex items-center gap-2">
+                      {section.id === 'writing' ? '試験を終了して提出' : '次へ進む'} <ChevronRight size={20}/>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {section.id === 'submitting' && (
+                <div className="text-center py-24 space-y-8 flex-1 flex flex-col justify-center animate-pulse items-center">
+                  <Loader2 className="w-20 h-20 text-indigo-600 animate-spin"/>
+                  <h2 className="text-2xl font-black uppercase tracking-widest text-slate-800">AI Scoring in Progress...</h2>
+                  <p className="text-lg text-slate-400 font-bold">B1.5評価基準に基づいて詳細な採点を行っています。</p>
+                </div>
+              )}
+              
+              {section.id === 'complete' && (
+                <div className="text-center py-20 space-y-10 flex-1 flex flex-col justify-center items-center animate-in zoom-in-95">
+                  <div className="w-24 h-24 bg-green-100 rounded-3xl flex items-center justify-center text-green-600 shadow-xl border-4 border-white"><CheckCircle size={56}/></div>
+                  <h2 className="text-4xl font-black text-slate-800">提出完了</h2>
+                  <p className="text-slate-500 text-xl font-bold">お疲れ様でした。解答は無事に送信されました。</p>
+                  <div className="pt-12 flex flex-col gap-5 border-t w-full max-w-sm">
+                    <button onClick={() => setView('teacher-login')} className="text-slate-300 hover:text-indigo-600 px-6 py-2 text-[11px] font-black transition-all flex items-center gap-1.5 mx-auto underline uppercase tracking-[0.2em]"><Lock size={14}/> Teacher Admin Access</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TEACHER DASHBOARD VIEWS */}
+          {view === 'teacher-login' && (
+            <div className="max-w-md mx-auto py-24 text-center space-y-10 flex-1 flex flex-col justify-center items-center animate-in slide-in-from-bottom-8">
+               <div className="bg-slate-100 p-8 rounded-[2.5rem] shadow-inner text-indigo-600"><Lock size={64}/></div>
+               <h2 className="text-3xl font-black tracking-widest uppercase">Admin Login</h2>
+               <div className="space-y-6 w-full px-8">
+                 <input type="password" className="w-full p-6 rounded-3xl border-4 border-slate-100 text-center text-5xl font-black bg-slate-50 outline-none focus:border-indigo-600 tracking-[0.5em] shadow-inner" placeholder="••••" value={passcode} onChange={(e) => setPasscode(e.target.value)}/>
+                 <button onClick={() => passcode === TEACHER_PASSCODE ? setView('teacher-dashboard') : setError("パスコードが違います。")} className="w-full bg-indigo-600 text-white py-5 rounded-2xl font-black shadow-2xl text-2xl hover:bg-indigo-700 transition-all active:scale-95 tracking-widest">LOGIN</button>
+                 <button onClick={() => setView('student')} className="text-slate-400 font-bold underline text-sm uppercase tracking-tighter hover:text-slate-600">Cancel</button>
+               </div>
+            </div>
+          )}
+
+          {view === 'teacher-dashboard' && (
+            <div className="space-y-6 animate-in fade-in duration-300 flex-1 flex flex-col">
+              <div className="flex justify-between items-center bg-indigo-900 p-5 rounded-3xl text-white shadow-2xl border-4 border-indigo-800">
+                <div className="flex items-center gap-4">
+                  <div className="p-2 bg-white/10 rounded-2xl"><Users size={24}/></div>
+                  <h2 className="text-lg font-black tracking-tight uppercase">Teacher Portal Dashboard</h2>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => setIsTeacherListView(!isTeacherListView)} className="bg-indigo-700 hover:bg-indigo-600 px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition-all text-[11px] shadow-sm">{isTeacherListView ? <Eye size={12}/> : <FileSpreadsheet size={12}/>} {isTeacherListView ? "Student Detail" : "Ranking List"}</button>
+                  <button onClick={() => setView('student')} className="bg-white/10 px-4 py-2 rounded-lg font-bold text-[11px] hover:bg-white/20">Logout</button>
+                </div>
+              </div>
+
+              {isTeacherListView ? (
+                <div className="bg-white border-4 border-slate-100 rounded-3xl overflow-hidden shadow-2xl flex-1 flex flex-col">
+                  <div className="p-5 bg-slate-50 border-b-2 flex justify-between items-center text-slate-700">
+                    <h3 className="font-black text-lg uppercase tracking-wider">Ranking Table</h3>
+                  </div>
+                  <div className="overflow-x-auto flex-1">
+                    <table className="w-full text-left text-[11px] border-collapse">
+                      <thead className="bg-slate-100 font-black uppercase text-slate-500 tracking-wider sticky top-0">
+                        <tr className="border-b-2 border-slate-200">
+                          <th className="p-4 w-16">Rank</th>
+                          <th className="p-4">Student ID</th>
+                          <th className="p-4 text-center">P1(6)</th>
+                          <th className="p-4 text-center">P2(8)</th>
+                          <th className="p-4 text-center">WPM</th>
+                          <th className="p-4 text-center">P3(6)</th>
+                          <th className="p-4 text-center">W(10)</th>
+                          <th className="p-4 text-center font-black text-indigo-600 bg-indigo-50/50">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y-2 divide-slate-50">
+                        {submissions.map((sub, idx) => (
+                          <tr key={sub.id} className="hover:bg-indigo-50/40 cursor-pointer transition-colors group" onClick={() => { setSelectedSubmission(sub); setIsTeacherListView(false); }}>
+                            <td className="p-4 font-black text-slate-400 group-hover:text-indigo-600">{idx+1}</td>
+                            <td className="p-4 font-black text-slate-700">{sub.studentId}</td>
+                            <td className="p-4 text-center">{sub.evaluation.p1Score}</td>
+                            <td className="p-4 text-center font-bold">{sub.evaluation.p2Score}</td>
+                            <td className="p-4 text-center font-black text-green-600">{sub.evaluation.p2Wpm}</td>
+                            <td className="p-4 text-center">{sub.evaluation.p3Score}</td>
+                            <td className="p-4 text-center">{sub.evaluation.writingScore}</td>
+                            <td className="p-4 text-center font-black text-lg text-indigo-600 bg-indigo-50/20">{sub.evaluation.totalScore}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 flex-1 min-h-0">
+                  {/* Left List */}
+                  <div className="lg:col-span-1 space-y-2 overflow-y-auto pr-2 custom-scrollbar">
+                    {submissions.map((sub, idx) => (
+                      <button key={sub.id} onClick={() => setSelectedSubmission(sub)} className={`w-full text-left p-4 rounded-2xl border-2 transition-all flex items-center gap-3 ${selectedSubmission?.id === sub.id ? 'bg-indigo-600 text-white border-indigo-600 shadow-xl scale-[1.02] z-10' : 'bg-white hover:border-indigo-300 shadow-sm'}`}>
+                        <div className={`w-7 h-7 rounded-full flex items-center justify-center font-black text-[10px] ${selectedSubmission?.id === sub.id ? 'bg-white text-indigo-600' : 'bg-slate-100 text-slate-400'}`}>{idx+1}</div>
+                        <div className="flex-1 min-w-0">
+                           <p className="font-black truncate text-[11px] uppercase tracking-tighter">{sub.studentId.split('@')[0]}</p>
+                           <p className={`text-[9px] opacity-60 font-bold`}>{new Date(sub.timestamp?.seconds * 1000).toLocaleTimeString()}</p>
+                        </div>
+                        <div className="text-right font-black text-[14px]">
+                           <span>{sub.evaluation.totalScore}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Right Detail */}
+                  <div className="lg:col-span-3 overflow-y-auto pr-1 flex flex-col">
+                    {selectedSubmission ? (
+                      <div className="bg-white rounded-[2rem] border-4 border-slate-100 p-8 space-y-8 shadow-2xl animate-in slide-in-from-right-12">
+                        <div className="flex justify-between items-center border-b-4 border-slate-50 pb-8">
+                          <div>
+                            <h3 className="text-2xl font-black leading-none uppercase tracking-tight text-slate-800">Analytical Performance</h3>
+                            <p className="text-[12px] text-slate-400 font-bold mt-2 flex items-center gap-2 bg-slate-50 px-4 py-2 rounded-full border self-start"><Mail size={14}/> {selectedSubmission.studentId}</p>
+                          </div>
+                          <div className="bg-indigo-600 text-white px-10 py-6 rounded-[2rem] text-center shadow-xl border-4 border-indigo-400">
+                             <div className="text-6xl font-black">{selectedSubmission.evaluation.totalScore}<span className="text-2xl opacity-50 ml-2">/30</span></div>
+                             <p className="text-[10px] font-black uppercase tracking-[0.3em] mt-3">Overall CEFR B1.5 Grade</p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                          {[
+                            { title: "Speaking 1: 音読", score: selectedSubmission.evaluation.p1Score, max: 6, rat: selectedSubmission.evaluation.p1Rationale, trans: selectedSubmission.transcripts['speaking-1'] },
+                            { title: "Speaking 2: イラスト描写", score: selectedSubmission.evaluation.p2Score, max: 8, rat: selectedSubmission.evaluation.p2Rationale, wpm: selectedSubmission.evaluation.p2Wpm, trans: selectedSubmission.transcripts['speaking-2'] },
+                            { title: "Speaking 3: Q&A", score: selectedSubmission.evaluation.p3Score, max: 6, rat: selectedSubmission.evaluation.p3Rationale, trans: selectedSubmission.transcripts['speaking-3'] },
+                            { title: "Writing: エッセイ", score: selectedSubmission.evaluation.writingScore, max: 10, rat: selectedSubmission.evaluation.writingRationale, essay: selectedSubmission.writingContent }
+                          ].map((item, i) => (
+                            <div key={i} className="p-6 bg-slate-50 rounded-[2.5rem] border border-slate-200 flex flex-col shadow-sm transition-all hover:shadow-md">
+                              <div className="flex justify-between font-black mb-4 items-center">
+                                <span className="text-indigo-900 text-[13px] uppercase tracking-tighter flex items-center gap-2">
+                                  {i < 3 ? <Mic size={14}/> : <PenTool size={14}/>} {item.title}
+                                </span>
+                                <span className="text-indigo-600 font-black text-xl bg-white px-4 py-1.5 rounded-2xl border-2 shadow-inner">{item.score} / {item.max}</span>
+                              </div>
+                              
+                              {item.wpm && <div className="text-[11px] font-black text-green-600 mb-4 bg-green-50 px-4 py-1.5 rounded-full inline-block border-2 border-green-100 shadow-sm self-start flex items-center gap-1.5"><Award size={12}/> Speaking Speed: {item.wpm} WPM</div>}
+                              
+                              <div className="mb-5">
+                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter mb-2 border-b pb-1">Response Content / Transcription</p>
+                                <div className="text-[12px] text-slate-600 italic leading-relaxed bg-white/90 p-4 rounded-2xl border border-slate-100 max-h-48 overflow-y-auto font-medium shadow-inner">
+                                  "{item.essay || item.trans || "(No recorded response)"}"
+                                </div>
+                              </div>
+                              
+                              <div className="mt-auto bg-white/40 p-4 rounded-2xl border border-indigo-50">
+                                <p className="text-[10px] text-indigo-400 font-black uppercase tracking-tighter mb-2 flex items-center gap-1.5"><ClipboardList size={12}/> AI Assessment Rationale</p>
+                                <p className="text-[12px] text-slate-600 leading-snug font-bold border-l-4 border-indigo-200 pl-4">{item.rat}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="p-8 bg-slate-900 rounded-[3rem] text-white shadow-2xl border-4 border-slate-800 relative overflow-hidden">
+                           <div className="absolute top-0 right-0 p-12 opacity-10 text-indigo-400 rotate-12"><BarChart3 size={150}/></div>
+                           <h4 className="text-[12px] font-black text-indigo-400 uppercase tracking-[0.4em] mb-4 flex items-center gap-2 relative z-10"><Award size={16}/> Summary Recommendations</h4>
+                           <p className="text-[15px] italic leading-relaxed text-slate-200 font-medium relative z-10">"{selectedSubmission.evaluation.feedback}"</p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="h-full flex items-center justify-center text-slate-300 border-8 border-dashed rounded-[5rem] min-h-[500px] bg-slate-50/50 flex-col gap-6">
+                         <BarChart3 size={120} strokeWidth={1} className="opacity-20 animate-pulse"/>
+                         <p className="uppercase font-black text-sm tracking-[0.5em] opacity-40">Select student to view detail</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
